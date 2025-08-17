@@ -73,4 +73,20 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, comment_on_post)
+    )
+
+    # Вебхук для Render
+    port = int(os.environ.get("PORT", 8080))
+    url_path = TELEGRAM_TOKEN
+    webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/{TELEGRAM_TOKEN}"
+
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=url_path,
+        webhook_url=webhook_url,
+    )
