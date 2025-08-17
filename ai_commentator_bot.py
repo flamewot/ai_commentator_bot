@@ -1,23 +1,26 @@
-import logging
 import os
+import logging
 import openai
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import Message
+from aiogram.utils.executor import start_webhook
+import asyncio
 
-# 🔐 Берём токены из переменных окружения
+# Настройки
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-PORT = int(os.getenv("PORT", 8080))  # Render сам подставит порт
+PORT = int(os.getenv("PORT", 8080))
+WEBHOOK_PATH = f"/{TELEGRAM_TOKEN}"
+WEBHOOK_URL = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}{WEBHOOK_PATH}"
+WEBAPP_HOST = "0.0.0.0"
 
+# Инициализация
 openai.api_key = OPENAI_API_KEY
+bot = Bot(token=TELEGRAM_TOKEN)
+dp = Dispatcher()
 
-# Логирование
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.DEBUG,
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 # Генерация комментария
 async def generate_comment(post_text: str) -> str:
@@ -26,11 +29,9 @@ async def generate_comment(post_text: str) -> str:
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Ты токсичный комментатор."},
-                {
-                    "role": "user",
-                    "content": f"Ты не любишь всё и всех. Из интересов у тебя пиво, игра в танки и рыбалка. "
-                               f"Напиши токсичный комментарий не длиннее 100 слов к этому сообщению: {post_text}",
-                },
+                {"role": "user",
+                 "content": f"Ты не любишь всё и всех. Из интересов у тебя пиво, игра в танки и рыбалка. "
+                            f"Напиши токсичный комментарий не длиннее 100 слов к этому сообщению: {post_text}"}
             ],
         )
         return response["choices"][0]["message"]["content"].strip()
@@ -38,53 +39,27 @@ async def generate_comment(post_text: str) -> str:
         logger.error(f"Ошибка генерации комментария: {e}")
         return "Бля я сломался сори"
 
-
 # Обработчик сообщений
-async def comment_on_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    post_text = update.message.text if update.message else None
-    if not post_text:
-        return
+@dp.message_handler()
+async def comment_on_post(message: Message):
+    post_text = message.text
+    comment = await generate_comment(post_text)
+    await message.reply(comment)
 
-    logger.info(f"Новый пост: {post_text}")
-    comment_text = await generate_comment(post_text)
+# Запуск webhook
+async def on_startup(dispatcher: Dispatcher):
+    await bot.set_webhook(WEBHOOK_URL)
 
-    try:
-        await update.message.reply_text(comment_text)
-        logger.info("Ответ отправлен успешно.")
-    except Exception as e:
-        logger.error(f"Ошибка при отправке ответа: {e}")
-
-
-# 🚀 Запуск через webhook (Render)
-def main():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, comment_on_post)
-    )
-
-    # Render требует webhook, а не polling
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TELEGRAM_TOKEN}",
-    )
-
+async def on_shutdown(dispatcher: Dispatcher):
+    await bot.delete_webhook()
 
 if __name__ == "__main__":
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, comment_on_post)
-    )
-
-    url_path = TELEGRAM_TOKEN
-    webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/{TELEGRAM_TOKEN}"
-
-    application.run_webhook(
-        listen="0.0.0.0",
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        skip_updates=True,
+        host=WEBAPP_HOST,
         port=PORT,
-        url_path=url_path,
-        webhook_url=webhook_url,
     )
